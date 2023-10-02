@@ -1,40 +1,19 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"log"
 	"math/rand"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	//"time"
+	"github.com/patrickmn/go-cache"
 )
 
 var (
 	shortURLPrefix = "http://localhost:8080/"
-	longURLCollection *mongo.Collection
+	urlCache       = cache.New(5*time.Minute, 10*time.Minute)
 )
-
-func initMongoDB() *mongo.Client {
-	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
-	client, err := mongo.Connect(context.TODO(), clientOptions)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = client.Ping(context.TODO(), nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	longURLCollection = client.Database("urlshortener").Collection("urls")
-
-	return client
-}
 
 func generateShortURL() string {
 	return shortURLPrefix + randomString(6)
@@ -57,44 +36,28 @@ func shortenURL(c *gin.Context) {
 	}
 
 	shortURL := generateShortURL()
-
-	_, err := longURLCollection.InsertOne(context.TODO(), bson.M{
-		"short_url": shortURL,
-		"long_url": longURL,
-	})
-
-	if err != nil {
-		log.Fatal(err)
-	}
+	urlCache.Set(shortURL, longURL, cache.DefaultExpiration)
 
 	c.JSON(http.StatusOK, gin.H{"short_url": shortURL})
 }
 
 func redirect(c *gin.Context) {
-	fmt.Println("true..")
 	shortURL := c.Query("url")
-
-	var result bson.M
-	//x := "http://localhost:8080/3BNiMR"
-	err := longURLCollection.FindOne(context.TODO(), bson.M{"short_url": shortURL}).Decode(&result)
-	fmt.Println("true...")
-	if err != nil {
-		fmt.Println("Error..", err)
+	longURL, found := urlCache.Get(shortURL)
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
 		return
 	}
-	fmt.Println("==========true=========")
-	longURL := result["long_url"].(string)
+
 	fmt.Println(longURL)
-	c.Redirect(http.StatusTemporaryRedirect, longURL)
+	c.Redirect(http.StatusTemporaryRedirect, longURL.(string))
 }
 
 func main() {
-	initMongoDB()
 	router := gin.Default()
 
 	router.POST("/shorten", shortenURL)
-	router.GET("/short", redirect)
+	router.GET("/:short", redirect)
 
 	router.Run(":8080")
 }
